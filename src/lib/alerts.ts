@@ -29,7 +29,6 @@ export async function sendWebhookAlert(
     },
   ];
 
-  // Add up to 5 breaking changes as detail
   for (const c of breaking.slice(0, 5)) {
     blocks.push({
       type: "section",
@@ -82,33 +81,4 @@ export async function sendWebhookAlert(
       return false;
     }
   }
-}
-
-/**
- * Format changes as an email-friendly HTML body.
- */
-export function formatEmailBody(monitorName: string, changes: Change[]): string {
-  const breaking = changes.filter((c) => c.severity === "breaking");
-  const warnings = changes.filter((c) => c.severity === "warning");
-
-  let html = `<h2>🚨 Breaking Changes Detected: ${monitorName}</h2>`;
-  html += `<p><strong>${breaking.length}</strong> breaking, <strong>${warnings.length}</strong> warnings, <strong>${changes.length}</strong> total changes</p>`;
-
-  if (breaking.length > 0) {
-    html += "<h3>Breaking Changes</h3><ul>";
-    for (const c of breaking) {
-      html += `<li><strong>${c.changeType}</strong>: <code>${c.path}</code><br/>${c.description}</li>`;
-    }
-    html += "</ul>";
-  }
-
-  if (warnings.length > 0) {
-    html += "<h3>Warnings</h3><ul>";
-    for (const c of warnings.slice(0, 10)) {
-      html += `<li><strong>${c.changeType}</strong>: <code>${c.path}</code><br/>${c.description}</li>`;
-    }
-    html += "</ul>";
-  }
-
-  return html;
 }

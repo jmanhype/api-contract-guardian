@@ -24,16 +24,23 @@ export async function POST(req: NextRequest) {
 
   const baseUrl = process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin;
 
-  const session = await getStripe().checkout.sessions.create({
-    mode: "subscription",
-    payment_method_types: ["card"],
-    line_items: [{ price: priceId, quantity: 1 }],
-    success_url: `${baseUrl}/dashboard?upgraded=true`,
-    cancel_url: `${baseUrl}/dashboard?cancelled=true`,
-    client_reference_id: userId || "demo-user",
-    customer_email: email || undefined,
-    metadata: { plan, userId: userId || "demo-user" },
-  });
+  try {
+    const session = await getStripe().checkout.sessions.create({
+      mode: "subscription",
+      payment_method_types: ["card"],
+      line_items: [{ price: priceId, quantity: 1 }],
+      success_url: `${baseUrl}/dashboard?upgraded=true`,
+      cancel_url: `${baseUrl}/dashboard?cancelled=true`,
+      client_reference_id: userId || "demo-user",
+      customer_email: email || undefined,
+      metadata: { plan, userId: userId || "demo-user" },
+    });
 
-  return NextResponse.json({ url: session.url });
+    return NextResponse.json({ url: session.url });
+  } catch (err: any) {
+    return NextResponse.json(
+      { error: err.message || "Failed to create checkout session" },
+      { status: 500 }
+    );
+  }
 }
