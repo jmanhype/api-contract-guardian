@@ -1,30 +1,34 @@
 import { NextRequest, NextResponse } from "next/server";
-import { getDb, monitors, changes, users } from "@/lib/db";
-import { eq } from "drizzle-orm";
+import { db } from "@/lib/db";
 import { randomUUID } from "crypto";
 
 const DEMO_USER = "demo-user";
 
 function ensureDemoUser() {
-  const db = getDb();
-  const existing = db.select().from(users).where(eq(users.id, DEMO_USER)).all();
-  if (existing.length === 0) {
-    db.insert(users)
-      .values({ id: DEMO_USER, email: "demo@example.com", name: "Demo User" })
-      .run();
+  if (!db.users.getById(DEMO_USER)) {
+    db.users.upsert({
+      id: DEMO_USER,
+      email: "demo@example.com",
+      name: "Demo User",
+      githubId: null,
+      githubToken: null,
+      plan: "free",
+      stripeCustomerId: null,
+      stripeSubscriptionId: null,
+      createdAt: Date.now(),
+    });
   }
 }
 
-// GET /api/monitors — list all monitors
+// GET /api/monitors
 export async function GET(req: NextRequest) {
   const userId = req.headers.get("x-user-id") || DEMO_USER;
   ensureDemoUser();
-  const db = getDb();
-  const rows = db.select().from(monitors).where(eq(monitors.userId, userId)).all();
+  const rows = db.monitors.getByUserId(userId);
   return NextResponse.json(rows);
 }
 
-// POST /api/monitors — create a new monitor
+// POST /api/monitors
 export async function POST(req: NextRequest) {
   const userId = req.headers.get("x-user-id") || DEMO_USER;
   ensureDemoUser();
@@ -32,25 +36,24 @@ export async function POST(req: NextRequest) {
   const { name, specUrl, specType, webhookUrl, alertEmail } = body;
 
   if (!name || !specUrl) {
-    return NextResponse.json(
-      { error: "name and specUrl are required" },
-      { status: 400 }
-    );
+    return NextResponse.json({ error: "name and specUrl are required" }, { status: 400 });
   }
 
-  const db = getDb();
   const id = randomUUID();
-  db.insert(monitors)
-    .values({
-      id,
-      userId,
-      name,
-      specUrl,
-      specType: specType || "url",
-      webhookUrl: webhookUrl || null,
-      alertEmail: alertEmail || null,
-    })
-    .run();
+  db.monitors.insert({
+    id,
+    userId,
+    name,
+    specUrl,
+    specType: specType || "url",
+    lastSpec: null,
+    lastCheckedAt: null,
+    checkInterval: 3600,
+    webhookUrl: webhookUrl || null,
+    alertEmail: alertEmail || null,
+    status: "active",
+    createdAt: Date.now(),
+  });
 
   return NextResponse.json({ id, name, specUrl, status: "active" }, { status: 201 });
 }
@@ -59,10 +62,7 @@ export async function POST(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   const id = req.nextUrl.searchParams.get("id");
   if (!id) return NextResponse.json({ error: "id required" }, { status: 400 });
-
-  const db = getDb();
-  db.delete(changes).where(eq(changes.monitorId, id)).run();
-  db.delete(monitors).where(eq(monitors.id, id)).run();
-
+  db.changes.deleteByMonitorId(id);
+  db.monitors.delete(id);
   return NextResponse.json({ deleted: true });
 }

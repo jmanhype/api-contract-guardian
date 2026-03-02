@@ -1,122 +1,143 @@
-import { drizzle } from "drizzle-orm/better-sqlite3";
-import Database from "better-sqlite3";
-import { sqliteTable, text, integer, real } from "drizzle-orm/sqlite-core";
-import { sql } from "drizzle-orm";
+/**
+ * Simple JSON file-based storage for Vercel deployment.
+ * SQLite native modules don't work on Vercel serverless.
+ * This uses /tmp for ephemeral storage on Vercel, or ./data locally.
+ */
+
+import fs from "fs";
 import path from "path";
 
-// --- Schema ---
+const DATA_DIR = process.env.VERCEL
+  ? "/tmp/acg-data"
+  : path.join(process.cwd(), "data");
 
-export const users = sqliteTable("users", {
-  id: text("id").primaryKey(),
-  email: text("email").notNull(),
-  name: text("name"),
-  githubId: text("github_id"),
-  githubToken: text("github_token"),
-  plan: text("plan").default("free"), // free | starter | pro
-  stripeCustomerId: text("stripe_customer_id"),
-  stripeSubscriptionId: text("stripe_subscription_id"),
-  createdAt: integer("created_at", { mode: "timestamp" }).default(
-    sql`(unixepoch())`
-  ),
-});
-
-export const monitors = sqliteTable("monitors", {
-  id: text("id").primaryKey(),
-  userId: text("user_id")
-    .notNull()
-    .references(() => users.id),
-  name: text("name").notNull(),
-  specUrl: text("spec_url").notNull(), // OpenAPI spec URL or GitHub raw URL
-  specType: text("spec_type").default("url"), // url | github
-  lastSpec: text("last_spec"), // JSON of last fetched spec
-  lastCheckedAt: integer("last_checked_at", { mode: "timestamp" }),
-  checkInterval: integer("check_interval").default(3600), // seconds
-  webhookUrl: text("webhook_url"),
-  alertEmail: text("alert_email"),
-  status: text("status").default("active"), // active | paused | error
-  createdAt: integer("created_at", { mode: "timestamp" }).default(
-    sql`(unixepoch())`
-  ),
-});
-
-export const changes = sqliteTable("changes", {
-  id: text("id").primaryKey(),
-  monitorId: text("monitor_id")
-    .notNull()
-    .references(() => monitors.id),
-  severity: text("severity").notNull(), // breaking | warning | info
-  changeType: text("change_type").notNull(), // endpoint_removed | type_changed | field_required | param_renamed | endpoint_added | field_added
-  path: text("path").notNull(), // e.g. /users/{id} GET
-  description: text("description").notNull(),
-  oldValue: text("old_value"),
-  newValue: text("new_value"),
-  detectedAt: integer("detected_at", { mode: "timestamp" }).default(
-    sql`(unixepoch())`
-  ),
-  acknowledged: integer("acknowledged", { mode: "boolean" }).default(false),
-});
-
-// --- Database Connection ---
-
-const DB_PATH =
-  process.env.DB_PATH ||
-  path.join(process.cwd(), "data", "api-guardian.sqlite");
-
-let _db: ReturnType<typeof drizzle> | null = null;
-
-export function getDb() {
-  if (!_db) {
-    // Ensure data directory exists
-    const dir = path.dirname(DB_PATH);
-    const fs = require("fs");
-    if (!fs.existsSync(dir)) fs.mkdirSync(dir, { recursive: true });
-
-    const sqlite = new Database(DB_PATH);
-    sqlite.pragma("journal_mode = WAL");
-    sqlite.pragma("foreign_keys = ON");
-
-    // Create tables
-    sqlite.exec(`
-      CREATE TABLE IF NOT EXISTS users (
-        id TEXT PRIMARY KEY,
-        email TEXT NOT NULL,
-        name TEXT,
-        github_id TEXT,
-        github_token TEXT,
-        plan TEXT DEFAULT 'free',
-        stripe_customer_id TEXT,
-        stripe_subscription_id TEXT,
-        created_at INTEGER DEFAULT (unixepoch())
-      );
-      CREATE TABLE IF NOT EXISTS monitors (
-        id TEXT PRIMARY KEY,
-        user_id TEXT NOT NULL REFERENCES users(id),
-        name TEXT NOT NULL,
-        spec_url TEXT NOT NULL,
-        spec_type TEXT DEFAULT 'url',
-        last_spec TEXT,
-        last_checked_at INTEGER,
-        check_interval INTEGER DEFAULT 3600,
-        webhook_url TEXT,
-        alert_email TEXT,
-        status TEXT DEFAULT 'active',
-        created_at INTEGER DEFAULT (unixepoch())
-      );
-      CREATE TABLE IF NOT EXISTS changes (
-        id TEXT PRIMARY KEY,
-        monitor_id TEXT NOT NULL REFERENCES monitors(id),
-        severity TEXT NOT NULL,
-        change_type TEXT NOT NULL,
-        path TEXT NOT NULL,
-        description TEXT NOT NULL,
-        old_value TEXT,
-        new_value TEXT,
-        detected_at INTEGER DEFAULT (unixepoch()),
-        acknowledged INTEGER DEFAULT 0
-      );
-    `);
-
-    _db = drizzle(sqlite);
-  }
-  return _db;
+function ensureDir() {
+  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
 }
+
+function readJson<T>(file: string, fallback: T[]): T[] {
+  ensureDir();
+  const fp = path.join(DATA_DIR, file);
+  if (!fs.existsSync(fp)) return fallback;
+  try {
+    return JSON.parse(fs.readFileSync(fp, "utf-8"));
+  } catch {
+    return fallback;
+  }
+}
+
+function writeJson<T>(file: string, data: T[]): void {
+  ensureDir();
+  const fp = path.join(DATA_DIR, file);
+  fs.writeFileSync(fp, JSON.stringify(data, null, 2));
+}
+
+// --- Types ---
+
+export interface User {
+  id: string;
+  email: string;
+  name: string | null;
+  githubId: string | null;
+  githubToken: string | null;
+  plan: string;
+  stripeCustomerId: string | null;
+  stripeSubscriptionId: string | null;
+  createdAt: number;
+}
+
+export interface Monitor {
+  id: string;
+  userId: string;
+  name: string;
+  specUrl: string;
+  specType: string;
+  lastSpec: string | null;
+  lastCheckedAt: number | null;
+  checkInterval: number;
+  webhookUrl: string | null;
+  alertEmail: string | null;
+  status: string;
+  createdAt: number;
+}
+
+export interface Change {
+  id: string;
+  monitorId: string;
+  severity: string;
+  changeType: string;
+  path: string;
+  description: string;
+  oldValue: string | null;
+  newValue: string | null;
+  detectedAt: number;
+  acknowledged: boolean;
+}
+
+// --- Data Access ---
+
+export const db = {
+  users: {
+    getAll: () => readJson<User>("users.json", []),
+    getById: (id: string) => readJson<User>("users.json", []).find((u) => u.id === id),
+    upsert: (user: User) => {
+      const users = readJson<User>("users.json", []);
+      const idx = users.findIndex((u) => u.id === user.id);
+      if (idx >= 0) users[idx] = { ...users[idx], ...user };
+      else users.push(user);
+      writeJson("users.json", users);
+    },
+    update: (id: string, fields: Partial<User>) => {
+      const users = readJson<User>("users.json", []);
+      const idx = users.findIndex((u) => u.id === id);
+      if (idx >= 0) {
+        users[idx] = { ...users[idx], ...fields };
+        writeJson("users.json", users);
+      }
+    },
+  },
+  monitors: {
+    getAll: () => readJson<Monitor>("monitors.json", []),
+    getByUserId: (userId: string) =>
+      readJson<Monitor>("monitors.json", []).filter((m) => m.userId === userId),
+    getById: (id: string) =>
+      readJson<Monitor>("monitors.json", []).find((m) => m.id === id),
+    insert: (monitor: Monitor) => {
+      const monitors = readJson<Monitor>("monitors.json", []);
+      monitors.push(monitor);
+      writeJson("monitors.json", monitors);
+    },
+    update: (id: string, fields: Partial<Monitor>) => {
+      const monitors = readJson<Monitor>("monitors.json", []);
+      const idx = monitors.findIndex((m) => m.id === id);
+      if (idx >= 0) {
+        monitors[idx] = { ...monitors[idx], ...fields };
+        writeJson("monitors.json", monitors);
+      }
+    },
+    delete: (id: string) => {
+      const monitors = readJson<Monitor>("monitors.json", []).filter(
+        (m) => m.id !== id
+      );
+      writeJson("monitors.json", monitors);
+    },
+  },
+  changes: {
+    getAll: () => readJson<Change>("changes.json", []),
+    getByMonitorId: (monitorId: string) =>
+      readJson<Change>("changes.json", []).filter(
+        (c) => c.monitorId === monitorId
+      ),
+    insert: (change: Change) => {
+      const changes = readJson<Change>("changes.json", []);
+      changes.push(change);
+      writeJson("changes.json", changes);
+    },
+    deleteByMonitorId: (monitorId: string) => {
+      const changes = readJson<Change>("changes.json", []).filter(
+        (c) => c.monitorId !== monitorId
+      );
+      writeJson("changes.json", changes);
+    },
+  },
+};
