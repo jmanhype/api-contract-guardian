@@ -1,8 +1,15 @@
 import Stripe from "stripe";
 
-export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
-  apiVersion: "2025-12-18.acacia" as any,
-});
+let _stripe: Stripe | null = null;
+
+export function getStripe(): Stripe {
+  if (!_stripe) {
+    const key = process.env.STRIPE_SECRET_KEY;
+    if (!key) throw new Error("STRIPE_SECRET_KEY not configured");
+    _stripe = new Stripe(key, { apiVersion: "2025-12-18.acacia" as any });
+  }
+  return _stripe;
+}
 
 export const PLANS = {
   free: {
@@ -43,7 +50,3 @@ export const PLANS = {
 } as const;
 
 export type PlanKey = keyof typeof PLANS;
-
-export function getPlanLimits(plan: string) {
-  return PLANS[plan as PlanKey] || PLANS.free;
-}
