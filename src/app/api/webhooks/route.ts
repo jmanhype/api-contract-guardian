@@ -8,14 +8,25 @@ export async function POST(req: NextRequest) {
   const sig = req.headers.get("stripe-signature");
 
   if (!sig || !process.env.STRIPE_WEBHOOK_SECRET) {
-    return NextResponse.json({ error: "Missing signature or webhook secret" }, { status: 400 });
+    return NextResponse.json(
+      { error: "Missing signature or webhook secret" },
+      { status: 400 }
+    );
   }
 
   let event;
   try {
-    event = getStripe().webhooks.constructEvent(body, sig, process.env.STRIPE_WEBHOOK_SECRET);
-  } catch (err: any) {
-    return NextResponse.json({ error: `Webhook error: ${err.message}` }, { status: 400 });
+    event = getStripe().webhooks.constructEvent(
+      body,
+      sig,
+      process.env.STRIPE_WEBHOOK_SECRET
+    );
+  } catch (err: unknown) {
+    const message = err instanceof Error ? err.message : "Webhook error";
+    return NextResponse.json(
+      { error: `Webhook error: ${message}` },
+      { status: 400 }
+    );
   }
 
   switch (event.type) {
@@ -24,10 +35,10 @@ export async function POST(req: NextRequest) {
       const userId = session.client_reference_id;
       const plan = session.metadata?.plan || "starter";
       if (userId) {
-        db.users.update(userId, {
+        await db.users.update(userId, {
           plan,
-          stripeCustomerId: session.customer as string,
-          stripeSubscriptionId: session.subscription as string,
+          stripe_customer_id: session.customer as string,
+          stripe_subscription_id: session.subscription as string,
         });
       }
       break;
@@ -35,10 +46,12 @@ export async function POST(req: NextRequest) {
     case "customer.subscription.deleted": {
       const sub = event.data.object;
       const customerId = sub.customer as string;
-      const allUsers = db.users.getAll();
-      const user = allUsers.find((u) => u.stripeCustomerId === customerId);
+      const user = await db.users.getByStripeCustomerId(customerId);
       if (user) {
-        db.users.update(user.id, { plan: "free", stripeSubscriptionId: null });
+        await db.users.update(user.id, {
+          plan: "free",
+          stripe_subscription_id: null,
+        });
       }
       break;
     }

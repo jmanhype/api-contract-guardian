@@ -1,143 +1,159 @@
 /**
- * Simple JSON file-based storage for Vercel deployment.
- * SQLite native modules don't work on Vercel serverless.
- * This uses /tmp for ephemeral storage on Vercel, or ./data locally.
+ * Supabase-backed data access layer.
+ * Replaces the old JSON file storage with persistent Supabase tables.
  */
 
-import fs from "fs";
-import path from "path";
-
-const DATA_DIR = process.env.VERCEL
-  ? "/tmp/acg-data"
-  : path.join(process.cwd(), "data");
-
-function ensureDir() {
-  if (!fs.existsSync(DATA_DIR)) fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-
-function readJson<T>(file: string, fallback: T[]): T[] {
-  ensureDir();
-  const fp = path.join(DATA_DIR, file);
-  if (!fs.existsSync(fp)) return fallback;
-  try {
-    return JSON.parse(fs.readFileSync(fp, "utf-8"));
-  } catch {
-    return fallback;
-  }
-}
-
-function writeJson<T>(file: string, data: T[]): void {
-  ensureDir();
-  const fp = path.join(DATA_DIR, file);
-  fs.writeFileSync(fp, JSON.stringify(data, null, 2));
-}
+import { getSupabase } from "./supabase";
 
 // --- Types ---
 
 export interface User {
   id: string;
+  auth_id: string;
   email: string;
-  name: string | null;
-  githubId: string | null;
-  githubToken: string | null;
   plan: string;
-  stripeCustomerId: string | null;
-  stripeSubscriptionId: string | null;
-  createdAt: number;
+  stripe_customer_id: string | null;
+  stripe_subscription_id: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Monitor {
   id: string;
-  userId: string;
+  user_id: string;
   name: string;
-  specUrl: string;
-  specType: string;
-  lastSpec: string | null;
-  lastCheckedAt: number | null;
-  checkInterval: number;
-  webhookUrl: string | null;
-  alertEmail: string | null;
-  status: string;
-  createdAt: number;
+  url: string;
+  schedule: string;
+  webhook_url: string | null;
+  baseline: Record<string, unknown> | null;
+  last_checked_at: string | null;
+  created_at: string;
 }
 
-export interface Change {
+export interface ChangeRecord {
   id: string;
-  monitorId: string;
-  severity: string;
-  changeType: string;
-  path: string;
-  description: string;
-  oldValue: string | null;
-  newValue: string | null;
-  detectedAt: number;
-  acknowledged: boolean;
+  monitor_id: string;
+  changes: Record<string, unknown>[];
+  spec_snapshot: Record<string, unknown> | null;
+  checked_at: string;
 }
 
 // --- Data Access ---
 
 export const db = {
   users: {
-    getAll: () => readJson<User>("users.json", []),
-    getById: (id: string) => readJson<User>("users.json", []).find((u) => u.id === id),
-    upsert: (user: User) => {
-      const users = readJson<User>("users.json", []);
-      const idx = users.findIndex((u) => u.id === user.id);
-      if (idx >= 0) users[idx] = { ...users[idx], ...user };
-      else users.push(user);
-      writeJson("users.json", users);
+    getAll: async () => {
+      const { data } = await getSupabase().from("acg_users").select("*");
+      return (data || []) as User[];
     },
-    update: (id: string, fields: Partial<User>) => {
-      const users = readJson<User>("users.json", []);
-      const idx = users.findIndex((u) => u.id === id);
-      if (idx >= 0) {
-        users[idx] = { ...users[idx], ...fields };
-        writeJson("users.json", users);
-      }
+    getById: async (id: string) => {
+      const { data } = await getSupabase()
+        .from("acg_users")
+        .select("*")
+        .eq("id", id)
+        .single();
+      return data as User | null;
+    },
+    getByAuthId: async (authId: string) => {
+      const { data } = await getSupabase()
+        .from("acg_users")
+        .select("*")
+        .eq("auth_id", authId)
+        .single();
+      return data as User | null;
+    },
+    getByStripeCustomerId: async (customerId: string) => {
+      const { data } = await getSupabase()
+        .from("acg_users")
+        .select("*")
+        .eq("stripe_customer_id", customerId)
+        .single();
+      return data as User | null;
+    },
+    update: async (id: string, fields: Partial<User>) => {
+      await getSupabase()
+        .from("acg_users")
+        .update({ ...fields, updated_at: new Date().toISOString() })
+        .eq("id", id);
     },
   },
   monitors: {
-    getAll: () => readJson<Monitor>("monitors.json", []),
-    getByUserId: (userId: string) =>
-      readJson<Monitor>("monitors.json", []).filter((m) => m.userId === userId),
-    getById: (id: string) =>
-      readJson<Monitor>("monitors.json", []).find((m) => m.id === id),
-    insert: (monitor: Monitor) => {
-      const monitors = readJson<Monitor>("monitors.json", []);
-      monitors.push(monitor);
-      writeJson("monitors.json", monitors);
+    getByUserId: async (userId: string) => {
+      const { data } = await getSupabase()
+        .from("acg_monitors")
+        .select("*")
+        .eq("user_id", userId)
+        .order("created_at", { ascending: false });
+      return (data || []) as Monitor[];
     },
-    update: (id: string, fields: Partial<Monitor>) => {
-      const monitors = readJson<Monitor>("monitors.json", []);
-      const idx = monitors.findIndex((m) => m.id === id);
-      if (idx >= 0) {
-        monitors[idx] = { ...monitors[idx], ...fields };
-        writeJson("monitors.json", monitors);
-      }
+    getById: async (id: string) => {
+      const { data } = await getSupabase()
+        .from("acg_monitors")
+        .select("*")
+        .eq("id", id)
+        .single();
+      return data as Monitor | null;
     },
-    delete: (id: string) => {
-      const monitors = readJson<Monitor>("monitors.json", []).filter(
-        (m) => m.id !== id
-      );
-      writeJson("monitors.json", monitors);
+    countByUserId: async (userId: string) => {
+      const { count } = await getSupabase()
+        .from("acg_monitors")
+        .select("*", { count: "exact", head: true })
+        .eq("user_id", userId);
+      return count || 0;
+    },
+    insert: async (monitor: Omit<Monitor, "id" | "created_at">) => {
+      const { data, error } = await getSupabase()
+        .from("acg_monitors")
+        .insert(monitor)
+        .select()
+        .single();
+      if (error) throw error;
+      return data as Monitor;
+    },
+    update: async (id: string, fields: Partial<Monitor>) => {
+      await getSupabase().from("acg_monitors").update(fields).eq("id", id);
+    },
+    delete: async (id: string) => {
+      await getSupabase().from("acg_monitors").delete().eq("id", id);
+    },
+    getDueForCheck: async (tier: string, intervalSeconds: number) => {
+      const cutoff = new Date(
+        Date.now() - intervalSeconds * 1000
+      ).toISOString();
+      const { data } = await getSupabase()
+        .from("acg_monitors")
+        .select("*, acg_users!inner(plan)")
+        .or(`last_checked_at.is.null,last_checked_at.lt.${cutoff}`)
+        .eq("acg_users.plan", tier);
+      return (data || []) as (Monitor & {
+        acg_users: { plan: string };
+      })[];
     },
   },
   changes: {
-    getAll: () => readJson<Change>("changes.json", []),
-    getByMonitorId: (monitorId: string) =>
-      readJson<Change>("changes.json", []).filter(
-        (c) => c.monitorId === monitorId
-      ),
-    insert: (change: Change) => {
-      const changes = readJson<Change>("changes.json", []);
-      changes.push(change);
-      writeJson("changes.json", changes);
+    getByMonitorId: async (monitorId: string) => {
+      const { data } = await getSupabase()
+        .from("acg_changes")
+        .select("*")
+        .eq("monitor_id", monitorId)
+        .order("checked_at", { ascending: false })
+        .limit(50);
+      return (data || []) as ChangeRecord[];
     },
-    deleteByMonitorId: (monitorId: string) => {
-      const changes = readJson<Change>("changes.json", []).filter(
-        (c) => c.monitorId !== monitorId
-      );
-      writeJson("changes.json", changes);
+    insert: async (record: Omit<ChangeRecord, "id" | "checked_at">) => {
+      const { data, error } = await getSupabase()
+        .from("acg_changes")
+        .insert(record)
+        .select()
+        .single();
+      if (error) throw error;
+      return data as ChangeRecord;
+    },
+    deleteByMonitorId: async (monitorId: string) => {
+      await getSupabase()
+        .from("acg_changes")
+        .delete()
+        .eq("monitor_id", monitorId);
     },
   },
 };
