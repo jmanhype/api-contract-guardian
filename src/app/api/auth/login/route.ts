@@ -16,7 +16,7 @@ export async function POST(req: NextRequest) {
 
   const redirectTo = `${
     process.env.NEXT_PUBLIC_APP_URL || req.nextUrl.origin
-  }/api/auth/callback`;
+  }/auth/callback`;
 
   const { error } = await supabase.auth.signInWithOtp({
     email,
