@@ -1,8 +1,1 @@
-{
-  "crons": [
-    {
-      "path": "/api/cron/check-monitors",
-      "schedule": "*/5 * * * *"
-    }
-  ]
-}
+{"crons":[{"path":"/api/cron/check-monitors","schedule":"0 6 * * *"}]}
